@@ -1,0 +1,26 @@
+#include "AUtil.h"
+
+#include <iostream>
+#include <fstream>
+#include <ctime>
+
+
+const char* ALogger::tagToString(ALogger::Tag tag) {
+    switch(tag) {
+        case INFO: return "[INFO]";
+        case DEBUG: return "[DEBUG]";
+        case WARNING: return "[WARNING]";
+        case ERROR: return "[ERROR]";
+        default: return "";
+    }
+}
+
+void ALogger::logMessageToFile(ALogger::Tag tag, const std::string& message) {
+    std::ofstream file;
+    file.open(LOG_FILE_PATH, std::ios::app);
+    time_t now;
+    time(&now);
+    file << ctime(&now) << " " << ALogger::tagToString(tag) << ": " << message << std::endl;
+    file.close();
+}
+
