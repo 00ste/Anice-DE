@@ -3,6 +3,7 @@
 #include <iostream>
 #include <fstream>
 #include <ctime>
+#include <algorithm>
 
 
 const char* ALogger::tagToString(ALogger::Tag tag) {
@@ -20,7 +21,8 @@ void ALogger::logMessageToFile(ALogger::Tag tag, const std::string& message) {
     file.open(LOG_FILE_PATH, std::ios::app);
     time_t now;
     time(&now);
-    file << ctime(&now) << " " << ALogger::tagToString(tag) << ": " << message << std::endl;
+    std::string time_string = ctime(&now);
+    file << time_string << " " << ALogger::tagToString(tag) << ": " << message << std::endl;
     file.close();
 }
 

@@ -22,8 +22,8 @@ private:
     int xScreenHeight;
     Window rootWindow;
     Window wmWindow;
-    // AAtoms atoms;
     bool running;
+    Cursor cursors[CURSORS_N];
 
     std::list<AMonitor*> monitors;
     AMonitor* activeMonitor{};
@@ -35,6 +35,7 @@ private:
     Atom netAtoms[NET_N_ATOMS];
 
     // Event handlers
+    static int xErrorHandler(Display* display, XErrorEvent* e);
     std::function<void(XEvent*)> eventHandlers[LASTEvent];
     void mapRequestHandler(XEvent* e);
 

@@ -15,6 +15,7 @@ public:
     ASize getSize() const { return size; }
     void setSize(int x, int y) { size = { x, y }; }
     void addWorkspace(const std::string& name);
+    const std::vector<AWorkspace*>& getWorkspaces() const;
 
 private:
     ASize size;

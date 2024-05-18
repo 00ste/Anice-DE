@@ -16,18 +16,14 @@ AWindowManager::AWindowManager() {
 	sigaction(SIGCHLD, &sa, nullptr);
 
     // Init fields
-    display = XOpenDisplay(NULL);
+    display = XOpenDisplay(nullptr);
     xScreenNumber = DefaultScreen(display);
     xScreenWidth = DisplayWidth(display, xScreenNumber);
     xScreenHeight = DisplayHeight(display, xScreenNumber);
     rootWindow = RootWindow(display, xScreenNumber);
     running = true;
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Finished basic setup");
 
     updateMonitors();
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Finished monitor setup");
-
-    // atoms = AAtoms(display);
 
     wmWindow = XCreateSimpleWindow(display, rootWindow,
         0, 0, 1, 1, 0, 0, 0);
@@ -47,6 +43,11 @@ AWindowManager::AWindowManager() {
     netAtoms[NET_WM_WINDOW_TYPE] = XInternAtom(display, "_NET_WM_WINDOW_TYPE", False);
     netAtoms[NET_WM_WINDOW_TYPE_DIALOG] = XInternAtom(display, "_NET_WM_WINDOW_TYPE_DIALOG", False);
     netAtoms[NET_CLIENT_LIST] = XInternAtom(display, "_NET_CLIENT_LIST", False);
+
+    // Cursors
+    for (int i = 0; i < CURSORS_N; i++) {
+        cursors[i] = XCreateFontCursor(display, i);
+    }
     
     // Set window manager properties
     XChangeProperty(display, wmWindow, netAtoms[NET_WM_CHECK], XA_WINDOW, 32,
@@ -61,6 +62,7 @@ AWindowManager::AWindowManager() {
 
     // Select events
     XSetWindowAttributes attributes;
+    attributes.cursor = cursors[CURSOR_NORMAL];
 	attributes.event_mask = SubstructureRedirectMask
 		| SubstructureNotifyMask | ButtonPressMask | PointerMotionMask
 		| EnterWindowMask | LeaveWindowMask | StructureNotifyMask
@@ -74,6 +76,7 @@ AWindowManager::AWindowManager() {
 
     // TODO(DEBUG)
     system("/usr/bin/gnome-terminal");
+    ALogger::logMessageToFile(ALogger::Tag::INFO, "Finished window manager setup");
 }
 
 void AWindowManager::eventLoop() {
@@ -82,22 +85,21 @@ void AWindowManager::eventLoop() {
     // TODO(FIXME): XSync is most likely generating errors, that must be handled
     // by a error handler. https://tronche.com/gui/x/xlib/event-handling/XSync.html
     XSync(display, False);
-    ALogger::logMessageToFile(ALogger::Tag::INFO, "Started event loop");
+    XSetErrorHandler(xErrorHandler);
+
+    ALogger::logMessageToFile(ALogger::Tag::INFO, "Starting event loop");
     while (running && !XNextEvent(display, &event)) {
-        if (eventHandlers[event.type] == nullptr) {
-            std::stringstream message;
-            message << "Event of type " << event.type << " could not be handled";
-            ALogger::logMessageToFile(ALogger::Tag::DEBUG, message.str());
-            continue;
-        }
-        else {
-            std::stringstream message;
-            message << "Handling event of type " << event.type << "...";
-            ALogger::logMessageToFile(ALogger::Tag::DEBUG, message.str());
+        if (eventHandlers[event.type] != nullptr) {
             eventHandlers[event.type](&event);
         }
     }
-    ALogger::logMessageToFile(ALogger::Tag::INFO, "Finished event loop");
+}
+
+int AWindowManager::xErrorHandler(Display* display, XErrorEvent* e) {
+    std::stringstream message;
+    message << "Fatal error! request code " << e->request_code << ", error code " << e->error_code;
+    ALogger::logMessageToFile(ALogger::Tag::ERROR, message.str());
+    return 0;
 }
 
 void AWindowManager::updateMonitors() {
@@ -110,7 +112,9 @@ void AWindowManager::updateMonitors() {
         if (monitors.empty()) {
             AMonitor* monitor = new AMonitor(xScreenWidth, xScreenHeight);
             monitors.push_back(monitor);
-            ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Created new monitor object");
+            monitor->addWorkspace("Workspace 1");
+            activeMonitor = monitor;
+            activeWorkspace = monitor->getWorkspaces()[0];
         }
         for (AMonitor* monitor : monitors) {
             ASize size = monitor->getSize();
@@ -127,8 +131,17 @@ void AWindowManager::updateMonitors() {
 }
 
 void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Inside manage()");
-    /*
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Inside manage()");
+    if (attributes == nullptr) {
+        ALogger::logMessageToFile(ALogger::Tag::ERROR, "(manage) attributes was nullptr!!");
+        return;
+    }
+
+    if (activeMonitor == nullptr) {
+        ALogger::logMessageToFile(ALogger::Tag::ERROR, "(manage) activeMonitor was nullptr!!");
+        return;
+    }
+
     AWindow* window = new AWindow(
         attributes->x, attributes->y,
         attributes->width, attributes->height,
@@ -136,33 +149,29 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
         activeMonitor->getSize().x, activeMonitor->getSize().y,
         xWindow
     );
-     */
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Created new AWindow object");
 
-    // TODO(TEMP): Remove this
-    APoint winPosition = { 0, 0 };
-    ASize winSize = activeMonitor->getSize();
-    AWindow* window = new AWindow(
-            0, 0,
-            winSize.x, winSize.y,
-            10, 10,
-            winSize.x, winSize.y,
-            xWindow
-    );
+    APoint winPosition = window->getPosition();
+    ASize winSize = window->getSize();
 
     // TODO: the window might need to be spawned in a different workspace or monitor,
     // for example if it is a transient window for some other window
     activeWorkspace->addWindow(window);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Added window to the current workspace");
 
     XSelectInput(display, xWindow, EnterWindowMask | FocusChangeMask
         | PropertyChangeMask | StructureNotifyMask);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Selected input");
 
     XChangeProperty(display, rootWindow, netAtoms[NET_CLIENT_LIST], XA_WINDOW, 32, PropModeAppend,
                     (unsigned char *) &(window->getXWindow()), 1);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Added client to _NET_CLIENT_LIST");
 
     XMoveResizeWindow(display, window->getXWindow(), winPosition.x, winPosition.y, winSize.x, winSize.y);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Moved and resized window");
 
     XMapWindow(display, window->getXWindow());
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Window mapped successfully!");
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Window mapped successfully!");
 }
 
 void AWindowManager::mapRequestHandler(XEvent *e) {

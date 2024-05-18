@@ -8,3 +8,7 @@ AMonitor::AMonitor(int w, int h)
 void AMonitor::addWorkspace(const std::string &name) {
     workspaces.push_back(new AWorkspace(name));
 }
+
+const std::vector<AWorkspace *> &AMonitor::getWorkspaces() const {
+    return workspaces;
+}
