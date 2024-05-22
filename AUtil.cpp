@@ -3,7 +3,6 @@
 #include <iostream>
 #include <fstream>
 #include <ctime>
-#include <algorithm>
 
 
 const char* ALogger::tagToString(ALogger::Tag tag) {

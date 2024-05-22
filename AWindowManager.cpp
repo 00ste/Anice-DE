@@ -2,9 +2,9 @@
 
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
+#include <X11/keysym.h>
 #include <csignal>
 #include <sstream>
-// #include <signal.h>
 
 
 AWindowManager::AWindowManager() {
@@ -66,13 +66,33 @@ AWindowManager::AWindowManager() {
 	attributes.event_mask = SubstructureRedirectMask
 		| SubstructureNotifyMask | ButtonPressMask | PointerMotionMask
 		| EnterWindowMask | LeaveWindowMask | StructureNotifyMask
-		| PropertyChangeMask;
+		| PropertyChangeMask | KeyPressMask | KeyReleaseMask;
     
 	XChangeWindowAttributes(display, rootWindow, CWEventMask | CWCursor, &attributes);
 	XSelectInput(display, rootWindow, attributes.event_mask);
 
     // Init event handlers
-    eventHandlers[MapRequest] = [this](XEvent* e){ this->mapRequestHandler(e); };
+    eventHandlers[MapRequest]       = [this](XEvent* e) { this->mapRequestHandler(e); };
+    eventHandlers[KeyPress]         = [this](XEvent* e) { this->keyPressHandler(e); };
+    eventHandlers[KeyRelease]       = [this](XEvent* e) { this->keyPressHandler(e); };
+    eventHandlers[MappingNotify]    = [this](XEvent* e) { this->mappingNotifyHandler(e); };
+
+    // TODO: move keybind definitions somewhere else
+    keybinds.push_back({
+        KeyPress,
+        Mod4Mask,
+        XK_Return,
+        []() { system("/usr/bin/gnome-terminal"); }
+    });
+    keybinds.push_back({
+        KeyPress,
+        Mod4Mask,
+        XK_q,
+        [this]() { running = false; }
+    });
+
+    // Grab keys
+    grabKeys();
 
     // TODO(DEBUG)
     system("/usr/bin/gnome-terminal");
@@ -82,14 +102,15 @@ AWindowManager::AWindowManager() {
 void AWindowManager::eventLoop() {
     XEvent event;
 
-    // TODO(FIXME): XSync is most likely generating errors, that must be handled
-    // by a error handler. https://tronche.com/gui/x/xlib/event-handling/XSync.html
     XSync(display, False);
     XSetErrorHandler(xErrorHandler);
 
     ALogger::logMessageToFile(ALogger::Tag::INFO, "Starting event loop");
     while (running && !XNextEvent(display, &event)) {
         if (eventHandlers[event.type] != nullptr) {
+            std::stringstream message;
+            message << "Handling event of type " << eventTypeToString[event.type];
+            ALogger::logMessageToFile(ALogger::Tag::DEBUG, message.str());
             eventHandlers[event.type](&event);
         }
     }
@@ -149,7 +170,6 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
         activeMonitor->getSize().x, activeMonitor->getSize().y,
         xWindow
     );
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Created new AWindow object");
 
     APoint winPosition = window->getPosition();
     ASize winSize = window->getSize();
@@ -157,24 +177,20 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
     // TODO: the window might need to be spawned in a different workspace or monitor,
     // for example if it is a transient window for some other window
     activeWorkspace->addWindow(window);
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Added window to the current workspace");
 
     XSelectInput(display, xWindow, EnterWindowMask | FocusChangeMask
         | PropertyChangeMask | StructureNotifyMask);
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Selected input");
 
     XChangeProperty(display, rootWindow, netAtoms[NET_CLIENT_LIST], XA_WINDOW, 32, PropModeAppend,
                     (unsigned char *) &(window->getXWindow()), 1);
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Added client to _NET_CLIENT_LIST");
 
     XMoveResizeWindow(display, window->getXWindow(), winPosition.x, winPosition.y, winSize.x, winSize.y);
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Moved and resized window");
 
     XMapWindow(display, window->getXWindow());
     ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Window mapped successfully!");
 }
 
-void AWindowManager::mapRequestHandler(XEvent *e) {
+void AWindowManager::mapRequestHandler(XEvent* e) {
     ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Received map request");
     XWindowAttributes attributes;
     XMapRequestEvent* event = &e->xmaprequest;
@@ -189,7 +205,82 @@ void AWindowManager::mapRequestHandler(XEvent *e) {
     manage(event->window, &attributes);
 }
 
+void AWindowManager::mappingNotifyHandler(XEvent* e) {
+    XMappingEvent* event = &e->xmapping;
+    XRefreshKeyboardMapping(event);
+    if (event->request == MappingKeyboard)
+        grabKeys();
+}
+
+void AWindowManager::keyPressHandler(XEvent* e) {
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Inside keyPressHandler");
+    XKeyEvent* event = &e->xkey;
+    KeySym keysym = XKeycodeToKeysym(display, (KeyCode)event->keycode, 0);
+
+    for (AKeybind keybind : keybinds) {
+        if (keysym != keybind.keysym)
+            continue;
+        if (event->type != keybind.pressType)
+            continue;
+        if (cleanMask(keybind.mod) != cleanMask(event->state))
+            continue;
+        if (keybind.action != nullptr)
+            keybind.action();
+    }
+}
+
 AWindow* AWindowManager::getWindowFromXWindow(Window xWindow) {
     // TODO: Implement this
     return nullptr;
+}
+
+// TODO: Implement this
+void AWindowManager::focusWindow(AWindow* window) {
+    if (window == nullptr) {
+        XSetInputFocus(display, rootWindow, RevertToPointerRoot, CurrentTime);
+        XDeleteProperty(display, rootWindow, netAtoms[NET_ACTIVE_WINDOW]);
+    }
+    else {
+
+    }
+
+}
+
+void AWindowManager::grabKeys() {
+    // update num lock mask
+    numLockMask = 0;
+
+    std::vector<unsigned int> modifiers = { 0, LockMask, numLockMask, numLockMask | LockMask };
+    XModifierKeymap* modmap = XGetModifierMapping(display);
+    for (int i = 0; i < 8; i++)
+        for (int j = 0; j < modmap->max_keypermod; j++)
+            if (modmap->modifiermap[i * modmap->max_keypermod + j]
+                == XKeysymToKeycode(display, XK_Num_Lock))
+                numLockMask = (1 << i);
+    XFreeModifiermap(modmap);
+
+    // ungrab keys
+    XUngrabKey(display, AnyKey, AnyModifier, rootWindow);
+
+    // get keyboard information
+    int start, end, skip;
+    XDisplayKeycodes(display, &start, &end);
+    KeySym* syms = XGetKeyboardMapping(display, start, end - start + 1, &skip);
+    if (syms == nullptr) return;
+
+    // grab keys
+    for (int k = start; k <= end; k++) {
+        for (int i = 0; i < keybinds.size(); i++) {
+            if (keybinds[i].keysym == syms[(k - start) * skip]) {
+                for (int j = 0; j < modifiers.size(); j++) {
+                    XGrabKey(display, k, keybinds[i].mod | modifiers[j],
+                         rootWindow, true, GrabModeAsync, GrabModeAsync);
+                }
+            }
+        }
+    }
+
+    // free the array
+    XFree(syms);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Grabbed keys");
 }
