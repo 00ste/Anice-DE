@@ -3,6 +3,7 @@
 
 
 #include <string>
+#include <functional>
 #include <X11/Xlib.h>
 
 
@@ -74,6 +75,13 @@ static std::string eventTypeToString[LASTEvent] = {
 
 // STRUCTS
 
+typedef struct {
+    int pressType;                      // such as KeyPress or KeyRelease (defined in Xlib.h)
+    unsigned int mod;
+    KeySym keysym;
+    std::function<void(void)> action;
+} AKeybind;
+
 struct _APoint {
     int x;
     int y;
@@ -88,7 +96,6 @@ struct _ARect {
     int w;
     int h;
 };
-
 
 // CLASSES
 
