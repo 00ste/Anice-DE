@@ -4,7 +4,9 @@
 
 #include <string>
 #include <functional>
+#include <sstream>
 #include <X11/Xlib.h>
+#include <X11/keysym.h>
 
 
 // ENUMS
@@ -35,6 +37,21 @@ static std::string eventTypeToString[LASTEvent] = {
         "ColormapNotify", "ClientMessage", "MappingNotify",
         "GenericEvent"
 };
+
+static std::string modToString(unsigned int mod) {
+    std::stringstream output;
+
+    if ((mod & ShiftMask) != 0 )    output << "Shift";
+    if ((mod & LockMask) != 0)      output << "Num Lock";
+    if ((mod & ControlMask) != 0)   output << "Ctrl";
+    if ((mod & Mod1Mask) != 0)      output << "Mod1";
+    if ((mod & Mod2Mask) != 0)      output << "Mod2";
+    if ((mod & Mod3Mask) != 0)      output << "Mod3";
+    if ((mod & Mod4Mask) != 0)      output << "Mod4";
+    if ((mod & Mod5Mask) != 0)      output << "Mod5";
+
+    return output.str();
+}
 
 /* FROM X.h ALL THE EVENT TYPES AND THEIR RESPECTIVE ID:
 #define KeyPress                2

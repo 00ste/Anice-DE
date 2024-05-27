@@ -3,11 +3,15 @@
 #include <X11/Xlib.h>
 #include <X11/Xatom.h>
 #include <X11/keysym.h>
+#include <X11/XKBlib.h>
 #include <csignal>
 #include <sstream>
 
 
 AWindowManager::AWindowManager() {
+    if (!setlocale(LC_CTYPE, "") || !XSupportsLocale())
+        fputs("warning: no locale support\n", stderr);
+
     // Do not transform children into zombies when they terminate
     struct sigaction sa{};
     sigemptyset(&sa.sa_mask);
@@ -24,6 +28,12 @@ AWindowManager::AWindowManager() {
     running = true;
 
     updateMonitors();
+    activeWindow = nullptr;
+
+    XSelectInput(display, DefaultRootWindow(display), SubstructureRedirectMask);
+    XSync(display, false);
+    XSetErrorHandler(xErrorHandler);
+    XSync(display, false);
 
     wmWindow = XCreateSimpleWindow(display, rootWindow,
         0, 0, 1, 1, 0, 0, 0);
@@ -78,24 +88,22 @@ AWindowManager::AWindowManager() {
     eventHandlers[MappingNotify]    = [this](XEvent* e) { this->mappingNotifyHandler(e); };
 
     // TODO: move keybind definitions somewhere else
-    keybinds.push_back({
-        KeyPress,
-        Mod4Mask,
-        XK_Return,
+    //
+    keybinds.push_back({ KeyPress, Mod4Mask, XK_Return,
         []() { system("/usr/bin/gnome-terminal"); }
     });
-    keybinds.push_back({
-        KeyPress,
-        Mod4Mask,
-        XK_q,
+    keybinds.push_back({ KeyPress, Mod4Mask, XK_q,
         [this]() { running = false; }
+    });
+    keybinds.push_back({ KeyRelease, Mod4Mask, XK_Tab,
+        [this]() {
+        ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Alt+Tab clicked");
+        focusWindow(activeWorkspace->nextWindow(activeWindow));
+        }
     });
 
     // Grab keys
     grabKeys();
-
-    // TODO(DEBUG)
-    system("/usr/bin/gnome-terminal");
     ALogger::logMessageToFile(ALogger::Tag::INFO, "Finished window manager setup");
 }
 
@@ -103,7 +111,6 @@ void AWindowManager::eventLoop() {
     XEvent event;
 
     XSync(display, False);
-    XSetErrorHandler(xErrorHandler);
 
     ALogger::logMessageToFile(ALogger::Tag::INFO, "Starting event loop");
     while (running && !XNextEvent(display, &event)) {
@@ -170,6 +177,7 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
         activeMonitor->getSize().x, activeMonitor->getSize().y,
         xWindow
     );
+    // TODO: set window title
 
     APoint winPosition = window->getPosition();
     ASize winSize = window->getSize();
@@ -186,12 +194,16 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
 
     XMoveResizeWindow(display, window->getXWindow(), winPosition.x, winPosition.y, winSize.x, winSize.y);
 
-    XMapWindow(display, window->getXWindow());
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Window mapped successfully!");
+    XRaiseWindow(display, window->getXWindow());
+
+    // focus window
+    focusWindow(window);
+
+    // ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(manage) Window mapped successfully!");
 }
 
 void AWindowManager::mapRequestHandler(XEvent* e) {
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Received map request");
+    // ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Received map request");
     XWindowAttributes attributes;
     XMapRequestEvent* event = &e->xmaprequest;
 
@@ -213,16 +225,22 @@ void AWindowManager::mappingNotifyHandler(XEvent* e) {
 }
 
 void AWindowManager::keyPressHandler(XEvent* e) {
-    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Inside keyPressHandler");
     XKeyEvent* event = &e->xkey;
-    KeySym keysym = XKeycodeToKeysym(display, (KeyCode)event->keycode, 0);
+    KeySym keysym = XkbKeycodeToKeysym(display, (KeyCode)event->keycode, 0, 0);
 
-    for (AKeybind keybind : keybinds) {
+    /*
+    std::stringstream message;
+    message << "Inside keyPressHandler with keybind" << modToString(cleanMask(event->state));
+    message << " + " << XKeysymToString(keysym);
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, message.str());
+     */
+
+    for (const AKeybind& keybind : keybinds) {
         if (keysym != keybind.keysym)
             continue;
         if (event->type != keybind.pressType)
             continue;
-        if (cleanMask(keybind.mod) != cleanMask(event->state))
+        if ((cleanMask(keybind.mod) & cleanMask(event->state)) == 0)
             continue;
         if (keybind.action != nullptr)
             keybind.action();
@@ -231,26 +249,54 @@ void AWindowManager::keyPressHandler(XEvent* e) {
 
 AWindow* AWindowManager::getWindowFromXWindow(Window xWindow) {
     // TODO: Implement this
+    /*
+    for (AMonitor* monitor : monitors) {
+        for (AWorkspace* workspace : monitor.getWorkspaces()) {
+            for (AWindow* window : workspace->getWindows()) {
+                if (window->getXWindow() == xWindow) return window->getXWindow();
+            }
+        }
+    }
+    */
     return nullptr;
 }
 
-// TODO: Implement this
 void AWindowManager::focusWindow(AWindow* window) {
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Inside focusWindow");
     if (window == nullptr) {
+        // unfocus
         XSetInputFocus(display, rootWindow, RevertToPointerRoot, CurrentTime);
         XDeleteProperty(display, rootWindow, netAtoms[NET_ACTIVE_WINDOW]);
+        activeWindow = nullptr;
+        ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Unfocused");
     }
     else {
+        // focus new window
+        XSetInputFocus(display, window->getXWindow(), RevertToPointerRoot, CurrentTime);
+        XChangeProperty(display, rootWindow, netAtoms[NET_ACTIVE_WINDOW], XA_WINDOW, 32,
+            PropModeReplace, (unsigned char*) &(window->getXWindow()), 1);
+        activeWindow = window;
 
+        // focus monitor and workspace where the window is contained
+        // TODO: obtain monitor and workspace where a window is contained
+
+        sendMessage(window, wmAtoms[WM_TAKE_FOCUS]);
+
+        // redraw window on top of the stack
+        XMapWindow(display, window->getXWindow());
+
+        std::stringstream message;
+        message << "Focused window " << window->getTitle();
+        ALogger::logMessageToFile(ALogger::Tag::DEBUG, message.str());
     }
 
+    grabKeys();
 }
 
 void AWindowManager::grabKeys() {
     // update num lock mask
     numLockMask = 0;
 
-    std::vector<unsigned int> modifiers = { 0, LockMask, numLockMask, numLockMask | LockMask };
     XModifierKeymap* modmap = XGetModifierMapping(display);
     for (int i = 0; i < 8; i++)
         for (int j = 0; j < modmap->max_keypermod; j++)
@@ -262,25 +308,39 @@ void AWindowManager::grabKeys() {
     // ungrab keys
     XUngrabKey(display, AnyKey, AnyModifier, rootWindow);
 
-    // get keyboard information
-    int start, end, skip;
-    XDisplayKeycodes(display, &start, &end);
-    KeySym* syms = XGetKeyboardMapping(display, start, end - start + 1, &skip);
-    if (syms == nullptr) return;
-
     // grab keys
-    for (int k = start; k <= end; k++) {
-        for (int i = 0; i < keybinds.size(); i++) {
-            if (keybinds[i].keysym == syms[(k - start) * skip]) {
-                for (int j = 0; j < modifiers.size(); j++) {
-                    XGrabKey(display, k, keybinds[i].mod | modifiers[j],
-                         rootWindow, true, GrabModeAsync, GrabModeAsync);
-                }
-            }
+    std::vector<unsigned int> modifiers = { 0, LockMask, numLockMask, numLockMask | LockMask };
+    for (const AKeybind& keybind : keybinds) {
+        for (unsigned int modifier : modifiers) {
+            XGrabKey(display, XKeysymToKeycode(display, keybind.keysym),
+                keybind.mod | modifier, rootWindow, true,
+                GrabModeAsync, GrabModeAsync);
         }
     }
 
-    // free the array
-    XFree(syms);
     ALogger::logMessageToFile(ALogger::Tag::DEBUG, "Grabbed keys");
+}
+
+bool AWindowManager::sendMessage(AWindow* window, Atom protocol) {
+    int n;
+    Atom *protocols;
+    int exists = false;
+
+    if (XGetWMProtocols(display, window->getXWindow(), &protocols, &n)) {
+        while (!exists && n--)
+            exists = (protocols[n] == protocol);
+        XFree(protocols);
+    }
+
+    if (exists) {
+        XEvent ev;
+        ev.type = ClientMessage;
+        ev.xclient.window = window->getXWindow();
+        ev.xclient.message_type = wmAtoms[WM_PROTOCOLS];
+        ev.xclient.format = 32;
+        ev.xclient.data.l[0] = protocol;
+        ev.xclient.data.l[1] = CurrentTime;
+        XSendEvent(display, window->getXWindow(), False, NoEventMask, &ev);
+    }
+    return exists;
 }

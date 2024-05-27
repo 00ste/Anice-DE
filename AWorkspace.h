@@ -18,6 +18,7 @@ public:
     void setName(const std::string& name) { this->name = name; }
 
     void addWindow(AWindow* window);
+    AWindow* nextWindow(AWindow* window);
 
 private:
     std::string name;

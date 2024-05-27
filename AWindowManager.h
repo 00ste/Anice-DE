@@ -31,6 +31,7 @@ private:
     std::list<AMonitor*> monitors;
     AMonitor* activeMonitor{};
     AWorkspace* activeWorkspace{};
+    AWindow* activeWindow{};
 
     // Atoms
     Atom utf8StringAtom;
@@ -43,6 +44,7 @@ private:
 
     void focusWindow(AWindow* window);
     void grabKeys();
+    bool sendMessage(AWindow* window, Atom protocol);
 
     // Event handlers
     static int xErrorHandler(Display* display, XErrorEvent* e);
