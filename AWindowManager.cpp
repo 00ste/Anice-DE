@@ -22,10 +22,13 @@ AWindowManager::AWindowManager() {
     // Init fields
     display = XOpenDisplay(nullptr);
     xScreenNumber = DefaultScreen(display);
-    xScreenWidth = DisplayWidth(display, xScreenNumber);
-    xScreenHeight = DisplayHeight(display, xScreenNumber);
+    xScreenSize = {
+        DisplayWidth(display, xScreenNumber),
+        DisplayHeight(display, xScreenNumber)
+    };
     rootWindow = RootWindow(display, xScreenNumber);
     running = true;
+    drawable = ADrawable(display, xScreenNumber, rootWindow, xScreenSize);
 
     updateMonitors();
     activeWindow = nullptr;
@@ -86,6 +89,7 @@ AWindowManager::AWindowManager() {
     eventHandlers[KeyPress]         = [this](XEvent* e) { this->keyPressHandler(e); };
     eventHandlers[KeyRelease]       = [this](XEvent* e) { this->keyPressHandler(e); };
     eventHandlers[MappingNotify]    = [this](XEvent* e) { this->mappingNotifyHandler(e); };
+    eventHandlers[ConfigureRequest] = [this](XEvent* e) { this->configureRequestHandler(e); };
 
     // TODO: move keybind definitions somewhere else
     //
@@ -138,7 +142,7 @@ void AWindowManager::updateMonitors() {
 #endif /* XINERAMA */
     {
         if (monitors.empty()) {
-            AMonitor* monitor = new AMonitor(xScreenWidth, xScreenHeight);
+            AMonitor* monitor = new AMonitor(xScreenSize.x, xScreenSize.y);
             monitors.push_back(monitor);
             monitor->addWorkspace("Workspace 1");
             activeMonitor = monitor;
@@ -146,9 +150,9 @@ void AWindowManager::updateMonitors() {
         }
         for (AMonitor* monitor : monitors) {
             ASize size = monitor->getSize();
-            if (size.x != xScreenWidth || size.y != xScreenHeight) {
+            if (size.x != xScreenSize.x || size.y != xScreenSize.y) {
                 dirty = true;
-                monitor->setSize(xScreenWidth, xScreenHeight);
+                monitor->setSize(xScreenSize.x, xScreenSize.y);
             }
         }
     }
@@ -194,7 +198,8 @@ void AWindowManager::manage(Window xWindow, XWindowAttributes* attributes) {
 
     XMoveResizeWindow(display, window->getXWindow(), winPosition.x, winPosition.y, winSize.x, winSize.y);
 
-    XRaiseWindow(display, window->getXWindow());
+    // XRaiseWindow(display, window->getXWindow());
+    XMapRaised(display, window->getXWindow());
 
     // focus window
     focusWindow(window);
@@ -245,6 +250,12 @@ void AWindowManager::keyPressHandler(XEvent* e) {
         if (keybind.action != nullptr)
             keybind.action();
     }
+}
+
+void AWindowManager::configureRequestHandler(XEvent* e) {
+    ALogger::logMessageToFile(ALogger::Tag::DEBUG, "(confreq) Handling configure request");
+
+
 }
 
 AWindow* AWindowManager::getWindowFromXWindow(Window xWindow) {

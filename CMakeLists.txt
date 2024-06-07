@@ -18,9 +18,14 @@ set(SOURCES AAtoms.cpp
         AWorkspace.h
         main.cpp
         AWorkspace.cpp
-        AUtil.cpp)
+        AUtil.cpp
+        ADrawable.h
+        ADrawable.cpp
+    )
 
 set(CMAKE_CXX_STANDARD 17)
+
+include_directories (/usr/include/freetype2)
 
 add_executable(${PROJECT_NAME} ${SOURCES})
 

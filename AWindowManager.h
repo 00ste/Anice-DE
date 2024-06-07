@@ -3,6 +3,7 @@
 
 
 #include "AMonitor.h"
+#include "ADrawable.h"
 
 #include <list>
 #include <functional>
@@ -18,13 +19,13 @@ public:
 private:
     Display* display;
     int xScreenNumber;
-    int xScreenWidth;
-    int xScreenHeight;
+    ASize xScreenSize;
     Window rootWindow;
     Window wmWindow;
     bool running;
     Cursor cursors[CURSORS_N];
     std::vector<AKeybind> keybinds;
+    ADrawable drawable;
 
     unsigned int numLockMask;
 
@@ -52,6 +53,7 @@ private:
     void mapRequestHandler(XEvent* e);
     void mappingNotifyHandler(XEvent* e);
     void keyPressHandler(XEvent* e);
+    void configureRequestHandler(XEvent *e);
 
     void updateMonitors();
     void manage(Window xWindow, XWindowAttributes* attributes);
